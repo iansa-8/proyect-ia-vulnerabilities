@@ -1,0 +1,6 @@
+export const AGENT_PROVIDER = Symbol('AGENT_PROVIDER');
+export const LLM_PROVIDER = Symbol('LLM_PROVIDER');
+export const INDEXER_PROVIDER = Symbol('INDEXER_PROVIDER');
+export const QUALITY_PROVIDER = Symbol('QUALITY_PROVIDER');
+export const QUALITY_ANALYZER_REGISTRY = Symbol('QUALITY_ANALYZER_REGISTRY');
+export const PIPELINE_ENGINE = Symbol('PIPELINE_ENGINE');
