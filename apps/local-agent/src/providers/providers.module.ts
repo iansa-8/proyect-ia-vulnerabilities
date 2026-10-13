@@ -51,6 +51,13 @@ import {
   ValidateApprovedProposalStep, ValidateChangeScopeStep,
 } from '../pipeline/steps/quality-fix-application.steps';
 import {
+  ApplyBulkApprovedFixesStep,
+  CheckBulkApplyAgentProviderStep,
+  CompareBulkQualitySnapshotsStep,
+  LoadBulkApprovedProposalsStep,
+  ValidateBulkApprovedProposalsStep,
+} from '../pipeline/steps/bulk-fix-application.steps';
+import {
   BuildValidationStep, E2EValidationStep, HealthValidationStep,
   StartupValidationStep, UnitValidationStep,
 } from '../pipeline/steps/fix-validation.steps';
@@ -100,6 +107,11 @@ function createPipelineEngine(
   healthValidation: HealthValidationStep,
   compareQualitySnapshots: CompareQualitySnapshotsStep,
   generateFixReport: GenerateFixApplicationReportStep,
+  loadBulkApprovedProposals: LoadBulkApprovedProposalsStep,
+  validateBulkApprovedProposals: ValidateBulkApprovedProposalsStep,
+  checkBulkApplyAgentProvider: CheckBulkApplyAgentProviderStep,
+  applyBulkApprovedFixes: ApplyBulkApprovedFixesStep,
+  compareBulkQualitySnapshots: CompareBulkQualitySnapshotsStep,
 ): SequentialPipelineEngine {
   const engine = new SequentialPipelineEngine();
   engine.registerStep(loadProject);
@@ -136,6 +148,11 @@ function createPipelineEngine(
   engine.registerStep(healthValidation);
   engine.registerStep(compareQualitySnapshots);
   engine.registerStep(generateFixReport);
+  engine.registerStep(loadBulkApprovedProposals);
+  engine.registerStep(validateBulkApprovedProposals);
+  engine.registerStep(checkBulkApplyAgentProvider);
+  engine.registerStep(applyBulkApprovedFixes);
+  engine.registerStep(compareBulkQualitySnapshots);
   for (const definition of PIPELINE_DEFINITIONS) {
     engine.registerDefinition(definition);
   }
@@ -180,6 +197,11 @@ function createPipelineEngine(
     HealthValidationStep,
     CompareQualitySnapshotsStep,
     GenerateFixApplicationReportStep,
+    LoadBulkApprovedProposalsStep,
+    ValidateBulkApprovedProposalsStep,
+    CheckBulkApplyAgentProviderStep,
+    ApplyBulkApprovedFixesStep,
+    CompareBulkQualitySnapshotsStep,
     CodebaseMemoryIndexerProvider,
     ProposeFixPromptBuilder,
     BulkProposeFixPromptBuilder,
@@ -265,6 +287,11 @@ function createPipelineEngine(
         HealthValidationStep,
         CompareQualitySnapshotsStep,
         GenerateFixApplicationReportStep,
+        LoadBulkApprovedProposalsStep,
+        ValidateBulkApprovedProposalsStep,
+        CheckBulkApplyAgentProviderStep,
+        ApplyBulkApprovedFixesStep,
+        CompareBulkQualitySnapshotsStep,
       ],
     },
   ],

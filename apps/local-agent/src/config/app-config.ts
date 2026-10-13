@@ -119,12 +119,56 @@ function readPositiveInt(raw: string | undefined, fallback: number): number {
   return Math.floor(n);
 }
 
-export function loadConfig(): AppConfig {
-  const root = resolveMonorepoRoot();
+function resolveSqlitePath(root: string): string {
   const sqliteRelative = process.env.SQLITE_PATH ?? 'data/app.sqlite';
-  const sqlitePath = path.isAbsolute(sqliteRelative)
+  return path.isAbsolute(sqliteRelative)
     ? sqliteRelative
     : path.join(root, sqliteRelative);
+}
+
+function buildIndexerConfig(): IndexerConfig {
+  return {
+    provider: (process.env.INDEXER_PROVIDER ?? 'codebase-memory').trim(),
+    codebaseMemoryCommand: (
+      process.env.CODEBASE_MEMORY_COMMAND ?? 'codebase-memory-mcp'
+    ).trim(),
+    codebaseMemoryUiUrl: (
+      process.env.CODEBASE_MEMORY_UI_URL ?? 'http://localhost:9749'
+    ).trim(),
+    indexContextMaxSymbols: readPositiveInt(
+      process.env.INDEX_CONTEXT_MAX_SYMBOLS,
+      20,
+    ),
+    indexContextMaxFiles: readPositiveInt(
+      process.env.INDEX_CONTEXT_MAX_FILES,
+      10,
+    ),
+    indexContextMaxSnippets: readPositiveInt(
+      process.env.INDEX_CONTEXT_MAX_SNIPPETS,
+      10,
+    ),
+    indexContextMaxSnippetChars: readPositiveInt(
+      process.env.INDEX_CONTEXT_MAX_SNIPPET_CHARS,
+      2000,
+    ),
+    indexCommandTimeoutMs: readPositiveInt(
+      process.env.INDEX_COMMAND_TIMEOUT_MS,
+      600_000,
+    ),
+    indexQueryTimeoutMs: readPositiveInt(
+      process.env.INDEX_QUERY_TIMEOUT_MS,
+      60_000,
+    ),
+    uiProbeTimeoutMs: readPositiveInt(
+      process.env.CODEBASE_MEMORY_UI_PROBE_TIMEOUT_MS,
+      1500,
+    ),
+  };
+}
+
+export function loadConfig(): AppConfig {
+  const root = resolveMonorepoRoot();
+  const sqlitePath = resolveSqlitePath(root);
 
   return {
     port: Number(process.env.PORT ?? 3001),
@@ -133,43 +177,7 @@ export function loadConfig(): AppConfig {
     sqlitePath,
     monorepoRoot: root,
     logLevel: parseLogLevel(process.env.LOG_LEVEL),
-    indexer: {
-      provider: (process.env.INDEXER_PROVIDER ?? 'codebase-memory').trim(),
-      codebaseMemoryCommand: (
-        process.env.CODEBASE_MEMORY_COMMAND ?? 'codebase-memory-mcp'
-      ).trim(),
-      codebaseMemoryUiUrl: (
-        process.env.CODEBASE_MEMORY_UI_URL ?? 'http://localhost:9749'
-      ).trim(),
-      indexContextMaxSymbols: readPositiveInt(
-        process.env.INDEX_CONTEXT_MAX_SYMBOLS,
-        20,
-      ),
-      indexContextMaxFiles: readPositiveInt(
-        process.env.INDEX_CONTEXT_MAX_FILES,
-        10,
-      ),
-      indexContextMaxSnippets: readPositiveInt(
-        process.env.INDEX_CONTEXT_MAX_SNIPPETS,
-        10,
-      ),
-      indexContextMaxSnippetChars: readPositiveInt(
-        process.env.INDEX_CONTEXT_MAX_SNIPPET_CHARS,
-        2000,
-      ),
-      indexCommandTimeoutMs: readPositiveInt(
-        process.env.INDEX_COMMAND_TIMEOUT_MS,
-        600_000,
-      ),
-      indexQueryTimeoutMs: readPositiveInt(
-        process.env.INDEX_QUERY_TIMEOUT_MS,
-        60_000,
-      ),
-      uiProbeTimeoutMs: readPositiveInt(
-        process.env.CODEBASE_MEMORY_UI_PROBE_TIMEOUT_MS,
-        1500,
-      ),
-    },
+    indexer: buildIndexerConfig(),
     quality: {
       sonarUrl: (process.env.SONAR_URL ?? '').trim(),
       sonarAllowedOrigins: parseOrigins(process.env.SONAR_ALLOWED_ORIGINS),

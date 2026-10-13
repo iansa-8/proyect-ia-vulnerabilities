@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>Estado general Sonar - preview</title>
+<link rel="stylesheet" href=".preview-status.css" />
+<style>
+  body { padding: 28px; max-width: 860px; margin: 0 auto; background: #f3f6fb; }
+  .case { margin-bottom: 26px; }
+  .case > h3 { font: 600 12px var(--font-sans, sans-serif); color: #7a8490; text-transform: uppercase; letter-spacing: .04em; margin: 0 0 8px; }
+</style>
+</head>
+<body>
+  <div class="case">
+    <h3>Completado — 0 activos / 5 solucionados</h3>
+    <div class="sonar-status sonar-status--success" role="status">
+      <span class="sonar-status__icon sonar-status__icon--check"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span>
+      <div class="sonar-status__text"><strong>Completado</strong><span>0 hallazgos activos / 5 solucionados</span></div>
+    </div>
+  </div>
+
+  <div class="case">
+    <h3>Sin hallazgos — aplicación limpia</h3>
+    <div class="sonar-status sonar-status--success" role="status">
+      <span class="sonar-status__icon sonar-status__icon--check"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg></span>
+      <div class="sonar-status__text"><strong>Sin hallazgos</strong><span>La aplicación no presenta hallazgos.</span></div>
+    </div>
+  </div>
+
+  <div class="case">
+    <h3>En progreso — 12 activos / 30 solucionados</h3>
+    <div class="sonar-status sonar-status--warning" role="status">
+      <span class="sonar-status__icon sonar-status__icon--spinner"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 0 1 9 9"/><path d="M21 12a9 9 0 0 1-9 9" opacity="0.45"/><path d="M12 21a9 9 0 0 1-9-9" opacity="0.25"/></svg></span>
+      <div class="sonar-status__text"><strong>En progreso</strong><span>12 hallazgos activos / 30 solucionados</span></div>
+    </div>
+  </div>
+
+  <div class="case">
+    <h3>Pendiente — 70 activos / 0 solucionados</h3>
+    <div class="sonar-status sonar-status--warning" role="status">
+      <span class="sonar-status__icon sonar-status__icon--clock"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></span>
+      <div class="sonar-status__text"><strong>Pendiente</strong><span>70 hallazgos activos / 0 solucionados</span></div>
+    </div>
+  </div>
+
+  <div class="case">
+    <h3>Crítico — 41 activos / 41 críticos</h3>
+    <div class="sonar-status sonar-status--error" role="status">
+      <span class="sonar-status__icon sonar-status__icon--close"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6 6 12 12"/><path d="m18 6-12 12"/></svg></span>
+      <div class="sonar-status__text"><strong>Crítico</strong><span>41 hallazgos activos / 41 críticos</span></div>
+    </div>
+  </div>
+
+  <div class="case">
+    <h3>Sin análisis</h3>
+    <div class="sonar-status sonar-status--neutral" role="status">
+      <span class="sonar-status__icon sonar-status__icon--dot"><svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.5"/></svg></span>
+      <div class="sonar-status__text"><strong>Sin análisis</strong><span>Ejecuta un análisis para conocer el estado.</span></div>
+    </div>
+  </div>
+</body>
+</html>

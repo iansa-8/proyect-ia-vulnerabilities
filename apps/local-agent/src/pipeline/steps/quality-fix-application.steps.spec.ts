@@ -6,6 +6,7 @@ import type { GitSafetyService, GitSafetySnapshot } from '../../agent/git-safety
 import type { QualitySnapshotRepository } from '../../persistence/quality-snapshot.repository';
 import { StructuredPatchEngine } from '../../remediation/structured-patch.engine';
 import { ApplyApprovedFixStep, CheckApplyAgentProviderStep, CompareQualitySnapshotsStep, LoadApprovedProposalStep, ValidateApprovedProposalStep, ValidateChangeScopeStep } from './quality-fix-application.steps';
+import { ApplyBulkApprovedFixesStep, CompareBulkQualitySnapshotsStep, ValidateBulkApprovedProposalsStep } from './bulk-fix-application.steps';
 
 const issue: QualityIssue = { id: 'issue-1', provider: 'sonar', rule: 'typescript:S1', severity: 'MAJOR', message: 'fix', file: 'src/a.ts', line: 1 };
 const proposal = {
@@ -223,6 +224,79 @@ describe('Quality Fix Application steps', () => {
       result: {
         targetResolved: true,
         newIssues: [expect.objectContaining({ id: 'new' })],
+      },
+    });
+  });
+
+  it('validates fallback proposals by exact context hashes after Git is initialized', async () => {
+    const ctx = context();
+    ctx.data.set('fix.proposals', [{
+      ...proposal,
+      warnings: ['Proyecto sin repositorio Git: la propuesta se protegió con hashes de contexto.'],
+    }]);
+    const safety = {
+      capture: jest.fn().mockResolvedValue({ ...baseline, fingerprint: 'new-git-fingerprint' }),
+    } as unknown as GitSafetyService;
+
+    await expect(new ValidateBulkApprovedProposalsStep(safety).execute(ctx)).resolves.toMatchObject({
+      status: 'success',
+      result: { proposalCount: 1, allowedFiles: ['src/a.ts'] },
+    });
+  });
+
+  it('applies several approved proposals with one agent invocation', async () => {
+    const secondIssue = { ...issue, id: 'issue-2', file: 'src/b.ts' };
+    const secondProposal = {
+      ...proposal,
+      id: 'proposal-2',
+      issueId: secondIssue.id,
+      affectedFiles: ['src/b.ts'],
+      proposedChanges: [{ file: 'src/b.ts', description: 'change b' }],
+    } as AgentProposalRecord;
+    const agent = {
+      name: 'opencode', capabilities: ['apply-fix'],
+      applyFix: jest.fn(async () => ({ success: true, summary: 'batch applied', touchedFiles: [], provider: 'opencode', durationMs: 8 })),
+    } as unknown as AgentProvider;
+    const safety = {
+      rollback: jest.fn().mockResolvedValue({ restoredFiles: ['src/a.ts', 'src/b.ts'], verified: true }),
+    } as unknown as GitSafetyService;
+    const ctx = context();
+    ctx.data.set('fix.proposals', [proposal, secondProposal]);
+    ctx.data.set('fix.issues', [issue, secondIssue]);
+    ctx.data.set('fix.allowedFiles', ['src/a.ts', 'src/b.ts']);
+    const step = new ApplyBulkApprovedFixesStep(agent, safety);
+
+    await expect(step.execute(ctx)).resolves.toMatchObject({
+      status: 'success',
+      result: { proposalIds: ['proposal-1', 'proposal-2'] },
+    });
+    expect(agent.applyFix).toHaveBeenCalledTimes(1);
+    expect(agent.applyFix).toHaveBeenCalledWith(expect.objectContaining({
+      proposalId: 'bulk:run-1',
+      allowedFiles: ['src/a.ts', 'src/b.ts'],
+      approvedProposal: expect.objectContaining({ affectedFiles: ['src/a.ts', 'src/b.ts'] }),
+    }));
+  });
+
+  it('reports partial bulk resolution without failing the validated run', async () => {
+    const secondIssue = { ...issue, id: 'issue-2' };
+    const before = { id: 'before', projectId: 'project-1', provider: 'sonar', createdAt: '', totalIssues: 2, severityCounts: {}, typeCounts: {} };
+    const after = { ...before, id: 'after', totalIssues: 1 };
+    const snapshots = {
+      findById: jest.fn().mockReturnValue(after),
+      listIssues: jest.fn().mockReturnValueOnce([issue, secondIssue]).mockReturnValueOnce([secondIssue]),
+    } as unknown as QualitySnapshotRepository;
+    const ctx = context();
+    ctx.data.set('fix.beforeSnapshot', before);
+    ctx.data.set('fix.proposals', [proposal, { ...proposal, id: 'proposal-2', issueId: 'issue-2' }]);
+    ctx.data.set('quality.snapshotId', 'after');
+
+    await expect(new CompareBulkQualitySnapshotsStep(snapshots).execute(ctx)).resolves.toMatchObject({
+      status: 'success',
+      result: {
+        resolvedIssueIds: ['issue-1'],
+        remainingIssueIds: ['issue-2'],
+        outcome: 'review_required',
       },
     });
   });

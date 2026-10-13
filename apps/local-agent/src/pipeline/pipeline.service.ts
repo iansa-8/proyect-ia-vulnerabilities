@@ -80,7 +80,7 @@ export class PipelineService implements OnModuleInit {
   async startRun(
     pipelineId: string,
     projectId: string,
-    options?: { forceReindex?: boolean; issueId?: string; proposalId?: string; approvedBy?: string; forceAI?: boolean; forceAgent?: boolean },
+    options?: { forceReindex?: boolean; issueId?: string; proposalId?: string; proposalIds?: string[]; approvedBy?: string; forceAI?: boolean; forceAgent?: boolean },
   ): Promise<PipelineRunView> {
     const definition = this.engine.getDefinition(pipelineId);
     if (!definition) {
@@ -101,7 +101,8 @@ export class PipelineService implements OnModuleInit {
     if (pipelineId === 'sonar-baseline' && this.activeBaselines.has(projectId)) {
       throw new ConflictException('A Sonar baseline is already running for this project');
     }
-    if (pipelineId === 'quality-fix-application' && this.activeFixApplications.has(projectId)) {
+    if ((pipelineId === 'quality-fix-application' || pipelineId === 'quality-bulk-fix-application')
+      && this.activeFixApplications.has(projectId)) {
       throw new ConflictException('A fix application is already running for this project');
     }
     const run = this.runs.create({
@@ -128,6 +129,7 @@ export class PipelineService implements OnModuleInit {
       context.data.set('agent.issueId', options.issueId);
     }
     if (options?.proposalId) context.data.set('fix.proposalId', options.proposalId);
+    if (options?.proposalIds?.length) context.data.set('fix.proposalIds', options.proposalIds);
     if (options?.approvedBy) context.data.set('fix.approvedBy', options.approvedBy);
     if (options?.forceAI === true) context.data.set('remediation.forceAI', true);
     if (options?.forceAgent === true) context.data.set('fix.forceAgent', true);
@@ -143,7 +145,7 @@ export class PipelineService implements OnModuleInit {
     };
 
     if (pipelineId === 'sonar-baseline') this.activeBaselines.add(projectId);
-    if (pipelineId === 'quality-fix-application') this.activeFixApplications.add(projectId);
+    if (pipelineId === 'quality-fix-application' || pipelineId === 'quality-bulk-fix-application') this.activeFixApplications.add(projectId);
     try {
       const result = await this.engine.run(definition.id, context, {
         emit,
@@ -186,7 +188,7 @@ export class PipelineService implements OnModuleInit {
       });
     } finally {
       if (pipelineId === 'sonar-baseline') this.activeBaselines.delete(projectId);
-      if (pipelineId === 'quality-fix-application') this.activeFixApplications.delete(projectId);
+      if (pipelineId === 'quality-fix-application' || pipelineId === 'quality-bulk-fix-application') this.activeFixApplications.delete(projectId);
     }
     return this.getRun(run.id);
   }

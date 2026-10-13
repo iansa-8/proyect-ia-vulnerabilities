@@ -52,6 +52,18 @@ class BulkProposeFixDto {
   issueIds!: string[];
 }
 
+class BulkApplyFixDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(30)
+  @IsUUID('4', { each: true })
+  proposalIds!: string[];
+
+  @IsString()
+  @IsNotEmpty()
+  approvedBy!: string;
+}
+
 @Controller()
 export class PipelineController {
   constructor(
@@ -158,6 +170,26 @@ export class PipelineController {
     @Body() dto: BulkProposeFixDto,
   ) {
     return this.bulkProposals.propose(projectId, dto.issueIds);
+  }
+
+  @Post('projects/:projectId/quality/proposals/bulk-apply')
+  applyFixesInBulk(
+    @Param('projectId') projectId: string,
+    @Body() dto: BulkApplyFixDto,
+  ) {
+    const unique = [...new Set(dto.proposalIds)];
+    if (unique.length !== dto.proposalIds.length) {
+      throw new ConflictException('Duplicate proposal ids are not allowed');
+    }
+    for (const proposalId of unique) {
+      const proposal = this.proposals.findById(proposalId);
+      if (!proposal || proposal.projectId !== projectId) throw new NotFoundException(`Proposal not found: ${proposalId}`);
+      if (proposal.status === 'rejected') throw new ConflictException(`Rejected proposal cannot be applied: ${proposalId}`);
+    }
+    return this.pipelineService.startRun('quality-bulk-fix-application', projectId, {
+      proposalIds: unique,
+      approvedBy: dto.approvedBy,
+    });
   }
 
   @Get('projects/:projectId/quality/issues/:issueId/proposals')

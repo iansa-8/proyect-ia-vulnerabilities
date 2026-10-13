@@ -147,6 +147,46 @@ export const QUALITY_FIX_APPLICATION_DEFINITION: PipelineDefinition = {
   ],
 };
 
+export const QUALITY_BULK_FIX_APPLICATION_DEFINITION: PipelineDefinition = {
+  id: 'quality-bulk-fix-application',
+  name: 'Bulk Quality Fix Application',
+  description: 'Aplica varias propuestas aprobadas con una llamada al agente y ejecuta la validación completa una sola vez.',
+  rollbackPolicy: 'onValidationFailure',
+  steps: [
+    { stepId: 'load-project' },
+    { stepId: 'load-bulk-approved-proposals' },
+    { stepId: 'check-code-index' },
+    { stepId: 'validate-bulk-approved-proposals' },
+    { stepId: 'capture-git-baseline' },
+    { stepId: 'check-bulk-apply-agent-provider' },
+    { stepId: 'apply-bulk-approved-fixes' },
+    { stepId: 'capture-run-changes' },
+    { stepId: 'validate-change-scope' },
+    { stepId: 'validate-fix-build', config: { required: true, timeoutMs: 600000 } },
+    { stepId: 'validate-fix-unit', config: { required: true, timeoutMs: 600000 } },
+    { stepId: 'validate-fix-e2e', config: { required: false, timeoutMs: 600000 } },
+    { stepId: 'validate-fix-startup', config: {
+      required: process.env.FIX_VALIDATION_STARTUP_REQUIRED !== 'false',
+      timeoutMs: Number(process.env.FIX_STARTUP_TIMEOUT_MS ?? 60_000),
+      readinessMs: Number(process.env.FIX_STARTUP_READINESS_MS ?? 5_000),
+    } },
+    { stepId: 'validate-fix-health', config: {
+      required: process.env.FIX_VALIDATION_HEALTH_REQUIRED === 'true',
+      healthUrl: process.env.FIX_HEALTH_URL,
+      pollIntervalMs: Number(process.env.FIX_HEALTH_POLL_INTERVAL_MS ?? 1_000),
+    } },
+    { stepId: 'check-quality-provider' },
+    { stepId: 'ensure-quality-project' },
+    { stepId: 'check-quality-analyzer' },
+    { stepId: 'run-quality-analysis' },
+    { stepId: 'wait-quality-processing' },
+    { stepId: 'download-quality-issues' },
+    { stepId: 'create-quality-snapshot' },
+    { stepId: 'compare-bulk-quality-snapshots' },
+    { stepId: 'complete' },
+  ],
+};
+
 export const PIPELINE_DEFINITIONS: readonly PipelineDefinition[] = [
   BASIC_PROJECT_CHECK_DEFINITION,
   PROJECT_INDEXING_DEFINITION,
@@ -154,4 +194,5 @@ export const PIPELINE_DEFINITIONS: readonly PipelineDefinition[] = [
   SONAR_BASELINE_DEFINITION,
   QUALITY_FIX_PROPOSAL_DEFINITION,
   QUALITY_FIX_APPLICATION_DEFINITION,
+  QUALITY_BULK_FIX_APPLICATION_DEFINITION,
 ];

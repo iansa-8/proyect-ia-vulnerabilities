@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import {
   createQualityProject,
   applyAgentProposal,
+  applyAgentProposalsInBulk,
   fetchHealth,
   fetchAgentHealth,
   fetchLLMHealth,
@@ -56,13 +57,18 @@ import {
 } from './api';
 import {
   CodeBlock,
+  DiffPreview,
   EmptyState,
   ErrorState,
+  Icon,
+  type IconName,
   LoadingState,
   MetadataList,
   MetadataRow,
   PageHeader,
+  PromptViewer,
   Section,
+  SeverityTrendChart,
   StatusBadge,
 } from './components';
 import { buildGraphUrl } from './graph-url';
@@ -277,6 +283,106 @@ function qualityProjectStateLabel(state: string): string {
   }
 }
 
+function qualityConnectionBadgeStatus(
+  status: string,
+): 'connected' | 'warning' | 'failed' {
+  if (status === 'CONNECTED' || status === 'PROJECT_EXISTS') return 'connected';
+  if (status === 'PROJECT_NOT_FOUND') return 'warning';
+  return 'failed';
+}
+
+const QUALITY_SEVERITY_ORDER = ['BLOCKER', 'CRITICAL', 'MAJOR', 'MINOR', 'INFO'];
+
+function orderSeverityEntries(
+  counts: Record<string, number>,
+): Array<[string, number]> {
+  return Object.entries(counts).sort((a, b) => {
+    const indexA = QUALITY_SEVERITY_ORDER.indexOf(a[0].toUpperCase());
+    const indexB = QUALITY_SEVERITY_ORDER.indexOf(b[0].toUpperCase());
+    return (indexA === -1 ? 99 : indexA) - (indexB === -1 ? 99 : indexB);
+  });
+}
+
+type SonarStatusTone = 'success' | 'warning' | 'error' | 'neutral';
+
+interface SonarStatusView {
+  tone: SonarStatusTone;
+  icon: IconName;
+  label: string;
+  detail: string;
+}
+
+/**
+ * Deriva un estado general de calidad a partir del último snapshot.
+ * Combina hallazgos activos vs. solucionados para reflejar el avance real.
+ */
+function resolveSonarStatus(
+  snapshot: QualitySnapshotView | undefined,
+): SonarStatusView {
+  if (!snapshot) {
+    return {
+      tone: 'neutral',
+      icon: 'dot',
+      label: 'Sin análisis',
+      detail: 'Ejecuta un análisis para conocer el estado.',
+    };
+  }
+
+  const total = snapshot.totalIssues ?? 0;
+  const open = snapshot.openIssues ?? 0;
+  const resolved = snapshot.resolvedIssues ?? 0;
+  const counts = snapshot.severityCounts ?? {};
+  const criticalActive = Object.entries(counts).reduce((sum, [key, value]) => {
+    const normalized = key.toUpperCase();
+    return normalized === 'CRITICAL' || normalized === 'BLOCKER' ? sum + value : sum;
+  }, 0);
+
+  if (total === 0) {
+    return {
+      tone: 'success',
+      icon: 'check',
+      label: 'Sin hallazgos',
+      detail: 'La aplicación no presenta hallazgos.',
+    };
+  }
+
+  if (open === 0) {
+    return {
+      tone: 'success',
+      icon: 'check',
+      label: 'Completado',
+      detail: `0 hallazgos activos / ${resolved} solucionados`,
+    };
+  }
+
+  // Sólo podemos confiar en el desglose por severidad si el snapshot
+  // contiene únicamente hallazgos activos (open === total).
+  if (open === total && criticalActive > 0) {
+    return {
+      tone: 'error',
+      icon: 'close',
+      label: 'Crítico',
+      detail: `${open} hallazgos activos / ${criticalActive} críticos`,
+    };
+  }
+
+  if (resolved > 0) {
+    return {
+      tone: 'warning',
+      icon: 'spinner',
+      label: 'En progreso',
+      detail: `${open} hallazgos activos / ${resolved} solucionados`,
+    };
+  }
+
+  return {
+    tone: 'warning',
+    icon: 'clock',
+    label: 'Pendiente',
+    detail: `${open} hallazgos activos / 0 solucionados`,
+  };
+}
+
 function baselineStepLabel(stepId: string): string {
   switch (stepId) {
     case 'load-project':
@@ -309,14 +415,22 @@ function baselineStepLabel(stepId: string): string {
       return 'Validando y guardando propuesta';
     case 'load-approved-proposal':
       return 'Cargando propuesta aprobada';
+    case 'load-bulk-approved-proposals':
+      return 'Cargando propuestas seleccionadas';
     case 'validate-approved-proposal':
       return 'Verificando vigencia y alcance';
+    case 'validate-bulk-approved-proposals':
+      return 'Verificando vigencia del lote';
     case 'capture-git-baseline':
       return 'Capturando checkpoint Git';
     case 'check-apply-agent-provider':
       return 'Verificando aplicador del fix';
+    case 'check-bulk-apply-agent-provider':
+      return 'Verificando agente para el lote';
     case 'apply-approved-fix':
       return 'Aplicando fix';
+    case 'apply-bulk-approved-fixes':
+      return 'Aplicando propuestas en una ejecución';
     case 'capture-run-changes':
       return 'Capturando cambios';
     case 'validate-change-scope':
@@ -333,6 +447,8 @@ function baselineStepLabel(stepId: string): string {
       return 'Health check';
     case 'compare-quality-snapshots':
       return 'Comparando BEFORE / AFTER';
+    case 'compare-bulk-quality-snapshots':
+      return 'Comparando todos los hallazgos';
     case 'generate-fix-report':
       return 'Generando reporte';
     case 'complete':
@@ -368,6 +484,32 @@ function stepStatusLabel(status: string): string {
     case 'pending': return 'Pendiente';
     default: return status.replaceAll('_', ' ');
   }
+}
+
+function stepStatusIcon(status: string): IconName {
+  switch (status) {
+    case 'success': return 'check';
+    case 'running': return 'spinner';
+    case 'failed': return 'close';
+    case 'skipped': return 'minus';
+    case 'rolled_back': return 'undo';
+    case 'pending': return 'clock';
+    default: return 'dot';
+  }
+}
+
+function StepStatusBadge({ status }: { status: string }) {
+  const label = stepStatusLabel(status);
+  return (
+    <span
+      className={`step-status step-status--${status}`}
+      role="img"
+      aria-label={label}
+      title={label}
+    >
+      <Icon name={stepStatusIcon(status)} size={14} />
+    </span>
+  );
 }
 
 function runningStepLabel(event: { type: string; summary: string } | null): string {
@@ -509,6 +651,9 @@ export function App() {
   const [bulkProposalResult, setBulkProposalResult] = useState<BulkProposalView | null>(null);
   const [bulkProposing, setBulkProposing] = useState(false);
   const [bulkProposalError, setBulkProposalError] = useState<string | null>(null);
+  const [bulkApplySelectedIds, setBulkApplySelectedIds] = useState<Set<string>>(new Set());
+  const [bulkApplying, setBulkApplying] = useState(false);
+  const [bulkApplyRun, setBulkApplyRun] = useState<PipelineRunView | null>(null);
   const [applyingFix, setApplyingFix] = useState(false);
   const [applyExecutionMode, setApplyExecutionMode] = useState<'default' | 'ai' | null>(null);
   const [fixApplicationRun, setFixApplicationRun] = useState<PipelineRunView | null>(null);
@@ -998,6 +1143,7 @@ export function App() {
       const [history, proposals] = await Promise.all([
         listQualitySnapshots(selectedId),
         listProjectAgentProposals(selectedId),
+        refreshAgentHealth(),
       ]);
       setSnapshots(history);
       setProjectProposals(proposals);
@@ -1010,11 +1156,50 @@ export function App() {
       setBulkSelectedIds(new Set(page.issues
         .filter((issue) => !isResolvedIssue(issue) && !proposedIssueIds.has(issue.id))
         .map((issue) => issue.id)));
+      setBulkApplySelectedIds(new Set(proposals
+        .filter((proposal) => (proposal.status === 'completed' || proposal.status === 'approved')
+          && page.issues.some((issue) => issue.id === proposal.issueId && !isResolvedIssue(issue)))
+        .map((proposal) => proposal.id)));
+      setBulkApplyRun(null);
     } catch (err) {
       setBulkSelectedIds(new Set());
       setBulkProposalError(err instanceof Error ? err.message : 'No se pudo cargar el reporte Sonar');
     } finally {
       setLoadingIssues(false);
+    }
+  };
+
+  const onApplyBulkProposals = async () => {
+    if (!selectedId || bulkApplySelectedIds.size === 0) return;
+    const selectedProposals = projectProposals.filter((proposal) => bulkApplySelectedIds.has(proposal.id));
+    const files = [...new Set(selectedProposals.flatMap((proposal) => proposal.affectedFiles))];
+    const approved = window.confirm(
+      `OpenCode aplicará ${selectedProposals.length} propuestas en una sola ejecución sobre ${files.length} archivo(s).\n\n`
+      + 'La plataforma ejecutará build, tests y Sonar una sola vez. Si falla una validación obligatoria, revertirá todo el lote.',
+    );
+    if (!approved) return;
+    setBulkApplying(true);
+    setBulkProposalError(null);
+    setBulkApplyRun(null);
+    try {
+      const run = await applyAgentProposalsInBulk(selectedId, [...bulkApplySelectedIds]);
+      setBulkApplyRun(run);
+      if (run.run.status !== 'success') throw new Error(run.run.error ?? 'No se pudo aplicar el lote');
+      const [history, proposals] = await Promise.all([
+        listQualitySnapshots(selectedId),
+        listProjectAgentProposals(selectedId),
+      ]);
+      setSnapshots(history);
+      setProjectProposals(proposals);
+      if (history[0]) {
+        const detail = await getQualitySnapshot(selectedId, history[0].id);
+        setQualityIssues(qualityPageFromSnapshot(detail.issues));
+      }
+      setBulkApplySelectedIds(new Set());
+    } catch (err) {
+      setBulkProposalError(err instanceof Error ? err.message : 'No se pudo aplicar el lote');
+    } finally {
+      setBulkApplying(false);
     }
   };
 
@@ -1356,6 +1541,7 @@ export function App() {
       counts[issue.severity] = (counts[issue.severity] ?? 0) + 1;
       return counts;
     }, {});
+  const sonarStatus = resolveSonarStatus(snapshots[0]);
   const latestProposalByIssue = new Map<string, AgentProposalView>();
   for (const proposal of projectProposals) {
     if (proposal.contextRevision
@@ -1672,6 +1858,90 @@ export function App() {
               >
                
                 
+                <div className={`sonar-status sonar-status--${sonarStatus.tone}`} role="status">
+                  <span className={`sonar-status__icon sonar-status__icon--${sonarStatus.icon}`}>
+                    <Icon name={sonarStatus.icon} size={18} />
+                  </span>
+                  <div className="sonar-status__text">
+                    <strong>{sonarStatus.label}</strong>
+                    <span>{sonarStatus.detail}</span>
+                  </div>
+                </div>
+
+                <div className="sonar-hero">
+                  <div className="sonar-hero__main">
+                    <div className="sonar-hero__total">
+                      <strong>{snapshots[0]?.totalIssues ?? '—'}</strong>
+                      <span>Hallazgos</span>
+                    </div>
+                    <div className="sonar-hero__chips">
+                      {snapshots[0] && Object.keys(snapshots[0].severityCounts).length ? (
+                        orderSeverityEntries(snapshots[0].severityCounts).map(([severity, count]) => (
+                          <span key={severity} className={`severity-chip severity-chip--${severity.toLowerCase()}`}>
+                            <strong>{count}</strong>
+                            {severity}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-muted">Sin capturas todavía</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="sonar-hero__actions">
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      disabled={runningBaseline || !selectedId}
+                      onClick={() => void onRunSonarBaseline()}
+                    >
+                      <ActionIcon name="analysis" />
+                      {runningBaseline ? 'Ejecutando análisis…' : 'Ejecutar análisis'}
+                    </button>
+                  </div>
+                </div>
+
+                {currentBaselineStep && !hideBaselineProgress ? (
+                  <div className="analysis-progress">
+                    <div className="analysis-progress__header">
+                      <StepStatusBadge status={currentBaselineStep.status} />
+                      <div className="analysis-progress__text">
+                        <strong>{baselineStepLabel(currentBaselineStep.stepId)}</strong>
+                        <p>{baselineStepDescription(currentBaselineStep.stepId)}</p>
+                      </div>
+                      <div className="analysis-progress__actions">
+                        <button type="button" className="sonar-action sonar-action--small"
+                          onClick={() => setShowBaselineSteps((value) => !value)}
+                          aria-label={showBaselineSteps ? 'Ocultar pasos' : 'Ver pasos'}
+                          data-tooltip={showBaselineSteps ? 'Ocultar pasos' : 'Ver pasos'}>
+                          <ActionIcon name="expand" />
+                        </button>
+                        <button type="button" className="sonar-action sonar-action--small"
+                          onClick={() => setHideBaselineProgress(true)} aria-label="Quitar detalle del análisis"
+                          data-tooltip="Quitar detalle">
+                          <ActionIcon name="dismiss" />
+                        </button>
+                      </div>
+                    </div>
+                    {showBaselineSteps ? (
+                      <ol className="analysis-steps">
+                        {baselineSteps.map((step: StepRunRecord) => (
+                          <li key={step.id} className="analysis-step">
+                            <StepStatusBadge status={step.status} />
+                            <span className="analysis-step__content">
+                              <strong>{baselineStepLabel(step.stepId)}</strong>
+                              <small>{baselineStepDescription(step.stepId)}</small>
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : null}
+                  </div>
+                ) : currentBaselineStep ? (
+                  <button type="button" className="analysis-progress-restore" onClick={() => setHideBaselineProgress(false)}>
+                    Mostrar detalle del último análisis
+                  </button>
+                ) : null}
+
                 <form id="quality-config-form" className="form-stack sonar-config" onSubmit={(e) => void onSaveQuality(e)}>
                   <div className="field sonar-key-field">
                     <label className="field__label" htmlFor="quality-project-key">
@@ -1709,54 +1979,22 @@ export function App() {
                       </p>
                     ) : null}
                   </div>
-                  <h3 className="subsection-title">Configuración del proyecto</h3>
-                  <MetadataList>
-                    <MetadataRow label="Servidor" mono>
-                      {displayValue(qualityConfig?.baseUrl)}
-                    </MetadataRow>
-                    <MetadataRow label="Autenticación">
-                      {qualityConfig?.authenticationConfigured
-                        ? 'Credencial disponible'
-                        : 'No configurada'}
-                    </MetadataRow>
-                    <MetadataRow label="Estado">
-                      {qualityConnection?.projectState || qualityConfig?.projectState
-                        ? qualityProjectStateLabel(
-                          qualityConnection?.projectState ??
-                          qualityConfig?.projectState ??
-                          'not_configured',
-                        )
-                        : '—'}
-                    </MetadataRow>
-                    <MetadataRow label="Conexión">
-                      {qualityConnection ? (
-                        <StatusBadge
-                          status={
-                            qualityConnection.status === 'CONNECTED' ||
-                              qualityConnection.status === 'PROJECT_EXISTS'
-                              ? 'connected'
-                              : qualityConnection.status === 'PROJECT_NOT_FOUND'
-                                ? 'warning'
-                                : 'failed'
-                          }
-                          label={qualityConnectionLabel(qualityConnection.status)}
-                        />
-                      ) : (
-                        'no probada'
-                      )}
-                    </MetadataRow>
-                    {qualityConnection?.version ? (
-                      <MetadataRow label="SonarQube / versión" mono>
-                        {qualityConnection.version}
-                      </MetadataRow>
-                    ) : null}
+                  <div className="sonar-status-line">
+                    <span className="sonar-status-line__label">Conexión</span>
+                    {qualityConnection ? (
+                      <StatusBadge
+                        status={qualityConnectionBadgeStatus(qualityConnection.status)}
+                        label={qualityConnectionLabel(qualityConnection.status)}
+                      />
+                    ) : (
+                      <span className="text-muted">no probada</span>
+                    )}
                     {qualityConnection?.project ? (
-                      <MetadataRow label="Proyecto remoto">
-                        {qualityConnection.project.name}{' '}
-                        <span className="mono">({qualityConnection.project.key})</span>
-                      </MetadataRow>
+                      <span className="sonar-status-line__project mono">
+                        {qualityConnection.project.key}
+                      </span>
                     ) : null}
-                  </MetadataList>
+                  </div>
 
 
                   {qualityConfig?.authenticationConfigured &&
@@ -1777,9 +2015,43 @@ export function App() {
                   ) : null}
                 </form>
 
-                <div className="subsection">
-                  <h3 className="subsection-title">Último análisis</h3>
+                <SeverityTrendChart snapshots={snapshots} />
+
+                {baselineHistoryError ? <ErrorState message={baselineHistoryError} /> : null}
+                {baselineRun?.run.error ? <ErrorState message={baselineRun.run.error} /> : null}
+
+                <details className="sonar-collapsible">
+                  <summary>Estado del entorno y conexión</summary>
                   <MetadataList>
+                    <MetadataRow label="Servidor" mono>
+                      {displayValue(qualityConfig?.baseUrl)}
+                    </MetadataRow>
+                    <MetadataRow label="Autenticación">
+                      {qualityConfig?.authenticationConfigured
+                        ? 'Credencial disponible'
+                        : 'No configurada'}
+                    </MetadataRow>
+                    <MetadataRow label="Estado del proyecto">
+                      {qualityConnection?.projectState || qualityConfig?.projectState
+                        ? qualityProjectStateLabel(
+                          qualityConnection?.projectState ??
+                          qualityConfig?.projectState ??
+                          'not_configured',
+                        )
+                        : '—'}
+                    </MetadataRow>
+                    <MetadataRow label="SonarQube">
+                      {qualityConnection?.version ?? '—'}
+                    </MetadataRow>
+                    {qualityConnection?.project ? (
+                      <MetadataRow label="Proyecto remoto">
+                        {qualityConnection.project.name}{' '}
+                        <span className="mono">({qualityConnection.project.key})</span>
+                      </MetadataRow>
+                    ) : null}
+                    <MetadataRow label="Última ejecución">
+                      {formatTimestamp(baselineRun?.run.finishedAt ?? snapshots[0]?.createdAt)}
+                    </MetadataRow>
                     <MetadataRow label="Analizador">
                       {scannerHealth == null
                         ? '—'
@@ -1792,22 +2064,6 @@ export function App() {
                         {scannerHealth.error}
                       </MetadataRow>
                     ) : null}
-                    <MetadataRow label="Fecha del análisis">
-                      {formatTimestamp(baselineRun?.run.finishedAt ?? undefined)}
-                    </MetadataRow>
-                    <MetadataRow label="Estado">
-                      {baselineRun ? <StatusBadge status={baselineRun.run.status} /> : '—'}
-                    </MetadataRow>
-                    {baselineRun && formatDuration(baselineRun.run.durationMs) ? (
-                      <MetadataRow label="Duración">
-                        {formatDuration(baselineRun.run.durationMs)}
-                      </MetadataRow>
-                    ) : null}
-                    <MetadataRow label="Fecha de captura">{formatTimestamp(snapshots[0]?.createdAt)}</MetadataRow>
-                    <MetadataRow label="Hallazgos actuales">{snapshots[0]?.openIssues ?? '—'}</MetadataRow>
-                    <MetadataRow label="Hallazgos solucionados">{snapshots[0]?.resolvedIssues ?? '—'}</MetadataRow>
-                    <MetadataRow label="Registros en la última captura">{snapshots[0]?.totalIssues ?? '—'}</MetadataRow>
-                    <MetadataRow label="Historial de capturas">{snapshots.length}</MetadataRow>
                     <MetadataRow label="Agente de código">
                       {agentHealth
                         ? agentHealth.available
@@ -1823,75 +2079,9 @@ export function App() {
                         ? `${llmHealth.available ? 'Disponible' : 'No disponible'}${llmHealth.model ? ` (${llmHealth.model})` : ''}`
                         : '—'}
                     </MetadataRow>
+                    <MetadataRow label="Historial de capturas">{snapshots.length}</MetadataRow>
                   </MetadataList>
-                  {snapshots[0] && Object.keys(snapshots[0].severityCounts).length ? (
-                    <div className="severity-strip" aria-label="Hallazgos por gravedad">
-                      {Object.entries(snapshots[0].severityCounts).map(([severity, count]) => (
-                        <div key={severity} className={`severity-card severity-card--${severity.toLowerCase()}`}>
-                          <span>{severity}</span><strong>{count}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                  {baselineHistoryError ? <ErrorState message={baselineHistoryError} /> : null}
-                  {baselineRun?.run.error ? <ErrorState message={baselineRun.run.error} /> : null}
-                  {runningBaseline && !baselineRun ? <p role="status">Preparando</p> : null}
-                  <div className="sonar-analysis-action">
-                    <button
-                      type="button"
-                      className={`sonar-run-button${runningBaseline ? ' sonar-action--busy' : ''}`}
-                      disabled={runningBaseline || !selectedId}
-                      aria-label={runningBaseline ? 'Ejecutando análisis Sonar' : 'Ejecutar análisis Sonar'}
-                      data-tooltip={runningBaseline ? 'Ejecutando análisis Sonar…' : 'Ejecutar análisis Sonar'}
-                      onClick={() => void onRunSonarBaseline()}
-                    >
-                      <ActionIcon name="analysis" />
-                    </button>
-                  </div>
-                  {currentBaselineStep && !hideBaselineProgress ? (
-                    <div className="analysis-progress">
-                      <div className="analysis-progress__header">
-                        <div>
-                          <span className={`step-status step-status--${currentBaselineStep.status}`}>
-                            {stepStatusLabel(currentBaselineStep.status)}
-                          </span>
-                          <strong>{baselineStepLabel(currentBaselineStep.stepId)}</strong>
-                          <p>{baselineStepDescription(currentBaselineStep.stepId)}</p>
-                        </div>
-                        <div className="analysis-progress__actions">
-                          <button type="button" className="sonar-action sonar-action--small"
-                            onClick={() => setShowBaselineSteps((value) => !value)}
-                            aria-label={showBaselineSteps ? 'Ocultar pasos' : 'Ver pasos'}
-                            data-tooltip={showBaselineSteps ? 'Ocultar pasos' : 'Ver pasos'}>
-                            <ActionIcon name="expand" />
-                          </button>
-                          <button type="button" className="sonar-action sonar-action--small"
-                            onClick={() => setHideBaselineProgress(true)} aria-label="Quitar detalle del análisis"
-                            data-tooltip="Quitar detalle">
-                            <ActionIcon name="dismiss" />
-                          </button>
-                        </div>
-                      </div>
-                      {showBaselineSteps ? (
-                        <ol className="analysis-steps">
-                          {baselineSteps.map((step: StepRunRecord) => (
-                            <li key={step.id} className="analysis-step">
-                              <span className={`step-status step-status--${step.status}`}>{stepStatusLabel(step.status)}</span>
-                              <span className="analysis-step__content">
-                                <strong>{baselineStepLabel(step.stepId)}</strong>
-                                <small>{baselineStepDescription(step.stepId)}</small>
-                              </span>
-                            </li>
-                          ))}
-                        </ol>
-                      ) : null}
-                    </div>
-                  ) : currentBaselineStep ? (
-                    <button type="button" className="analysis-progress-restore" onClick={() => setHideBaselineProgress(false)}>
-                      Mostrar detalle del último análisis
-                    </button>
-                  ) : null}
-                </div>
+                </details>
 
                 {showIssues && qualityIssues ? (
                   <div className="modal-backdrop" onMouseDown={(event) => {
@@ -1907,8 +2097,14 @@ export function App() {
                           </p>
                         </div>
                         <div className="button-row">
-                          <button type="button" className="btn btn--ghost" disabled={loadingIssues} onClick={() => void onOpenIssues()}>Actualizar</button>
-                          <button type="button" className="btn btn--secondary" disabled={loadingIssues} onClick={() => void onDownloadIssues()}>Descargar Excel</button>
+                          <button type="button" className="btn btn--ghost" disabled={loadingIssues} onClick={() => void onOpenIssues()}>
+                            <Icon name="refresh" />
+                            Actualizar
+                          </button>
+                          <button type="button" className="btn btn--secondary" disabled={loadingIssues} onClick={() => void onDownloadIssues()}>
+                            <Icon name="download" />
+                            Descargar Excel
+                          </button>
                            <button type="button" className="modal-close" onClick={() => setShowIssues(false)} aria-label="Cerrar hallazgos">×</button>
                         </div>
                       </div>
@@ -1933,17 +2129,18 @@ export function App() {
                               ))}
                             </div>
                             {Object.keys(visibleSeverityCounts).length > 0 ? (
-                              <div className="severity-strip severity-strip--filters" aria-label="Filtrar por gravedad">
-                                {Object.entries(visibleSeverityCounts).map(
+                              <div className="severity-chip-row" aria-label="Filtrar por gravedad">
+                                {orderSeverityEntries(visibleSeverityCounts).map(
                                   ([sev, count]) => (
                                     <button
                                       type="button"
                                       key={sev}
-                                      className={`severity-card severity-card--filter severity-card--${sev.toLowerCase()}${severityFilter === sev ? ' is-active' : ''}`}
+                                      className={`severity-chip severity-chip--clickable severity-chip--${sev.toLowerCase()}${severityFilter === sev ? ' is-active' : ''}`}
                                       aria-pressed={severityFilter === sev}
                                       onClick={() => onFilterSeverity(sev)}
                                     >
-                                      <span>{sev}</span><strong>{count}</strong>
+                                      <strong>{count}</strong>
+                                      {sev}
                                     </button>
                                   ),
                                 )}
@@ -2027,6 +2224,7 @@ export function App() {
                                 onClick={() => void onDownloadIssueReport()}
                                 title="Disponible para hallazgos activos y solucionados"
                               >
+                                <Icon name="report" />
                                 {downloadingIssueReport ? 'Generando informe…' : 'Descargar informe'}
                               </button>
                               <button
@@ -2035,6 +2233,7 @@ export function App() {
                                 disabled={loadingIssueContext || isResolvedIssue(selectedIssue)}
                                 onClick={() => void onLoadIssueContext()}
                               >
+                                <Icon name="code" />
                                 {loadingIssueContext
                                   ? 'Resolviendo…'
                                   : 'Ver contexto de código'}
@@ -2045,6 +2244,7 @@ export function App() {
                                 disabled={proposingFix || isResolvedIssue(selectedIssue) || hasActiveSelectedProposal}
                                 onClick={() => void onProposeFix(false)}
                               >
+                                <Icon name={hasActiveSelectedProposal ? 'check' : 'lightbulb'} />
                                 {hasActiveSelectedProposal ? 'Propuesta disponible' : proposalExecutionMode === 'default' ? 'Analizando…' : 'Proponer corrección'}
                               </button>
                               <button
@@ -2054,6 +2254,7 @@ export function App() {
                                 onClick={() => void onProposeFix(true)}
                                 title="Ignora la remediación local registrada y solicita una propuesta a la IA"
                               >
+                                <Icon name="sparkles" />
                                 {hasActiveSelectedProposal ? 'Propuesta disponible' : proposalExecutionMode === 'ai' ? 'Consultando IA…' : 'Proponer con IA'}
                               </button>
                             </div>
@@ -2170,7 +2371,7 @@ export function App() {
                                       {agentProposal.patch.edits.map((edit, index) => (
                                         <li key={`${edit.file}-${edit.startLine}-${index}`}>
                                           <span className="mono">{edit.file}:{edit.startLine}</span>
-                                          <CodeBlock>{`- ${edit.expectedText}\n+ ${edit.replacement}`}</CodeBlock>
+                                          <DiffPreview removed={edit.expectedText} added={edit.replacement} />
                                         </li>
                                       ))}
                                     </ul>
@@ -2207,6 +2408,7 @@ export function App() {
                                     disabled={applyingFix || agentProposal.status === 'rejected' || isResolvedIssue(selectedIssue)}
                                     onClick={() => void onRejectFix()}
                                   >
+                                    <Icon name="reject" />
                                     Rechazar
                                   </button>
                                   <button
@@ -2216,6 +2418,7 @@ export function App() {
                                     onClick={() => void onApplyFix(false)}
                                     title={applyUnavailableReason ?? undefined}
                                   >
+                                    <Icon name={agentProposal.requiresAgent ? 'robot' : 'play'} />
                                     {applyExecutionMode === 'default'
                                       ? 'Aplicando y validando…'
                                       : agentProposal.requiresAgent
@@ -2236,6 +2439,7 @@ export function App() {
                                           ? (agentHealth?.error ?? 'El agente de código no está disponible')
                                           : 'Delega la aplicación al agente de IA aunque exista una estrategia local'}
                                     >
+                                      <Icon name="robot" />
                                       {applyExecutionMode === 'ai' ? 'Aplicando con IA…' : 'Aplicar con IA'}
                                     </button>
                                   ) : null}
@@ -2331,11 +2535,11 @@ export function App() {
                                     <summary>Ver prompt sanitizado enviado al LLM</summary>
                                     <p className="text-muted">
                                       Carga exacta retenida después de redactar secretos.
-                                      {agentProposal.executionTrace.promptPreviewTruncated
-                                        ? ' La vista fue truncada por el límite de auditoría configurado.'
-                                        : ''}
                                     </p>
-                                    <CodeBlock>{agentProposal.executionTrace.promptPreview}</CodeBlock>
+                                    <PromptViewer
+                                      prompt={agentProposal.executionTrace.promptPreview}
+                                      truncated={agentProposal.executionTrace.promptPreviewTruncated}
+                                    />
                                   </details>
                                 ) : null}
                               </div>
@@ -2426,6 +2630,7 @@ export function App() {
                           ) : <EmptyState message="El último reporte no contiene hallazgos activos para proponer." />}
                           <div className="bulk-selection-action">
                             <button type="button" className="btn btn--primary" disabled={bulkProposing || bulkSelectedIds.size === 0} onClick={() => void onProposeBulkFixes()}>
+                              <Icon name="sparkles" />
                               {bulkProposing ? 'Preparando contexto y consultando IA…' : `Proponer para ${bulkSelectedIds.size} hallazgo${bulkSelectedIds.size === 1 ? '' : 's'}`}
                             </button>
                             <small>No se modifica código. Las propuestas quedan disponibles para revisión individual.</small>
@@ -2436,11 +2641,31 @@ export function App() {
                           {bulkProposalError ? <ErrorState message={bulkProposalError} /> : null}
                           {bulkAvailableProposals.length ? (
                             <div className="existing-proposals">
-                              <h3>Propuestas disponibles</h3>
+                              <div className="bulk-apply-header">
+                                <div>
+                                  <h3>Propuestas disponibles</h3>
+                                  <small>{bulkApplySelectedIds.size} seleccionada(s) para una ejecución del agente</small>
+                                </div>
+                                <button type="button" className="btn btn--primary"
+                                  disabled={bulkApplying || bulkApplySelectedIds.size === 0 || !agentCanApply}
+                                  onClick={() => void onApplyBulkProposals()}
+                                  title={!agentCanApply ? (agentHealth?.error ?? 'El agente no está disponible') : 'Una llamada al agente y una validación completa'}>
+                                  <Icon name="robot" />
+                                  {bulkApplying ? 'Aplicando lote…' : 'Aplicar seleccionadas'}
+                                </button>
+                              </div>
                               {bulkAvailableProposals.map((proposal) => {
                                 const issue = qualityIssues?.issues.find((item) => item.id === proposal.issueId);
                                 return (
                                   <article className="existing-proposal-card" key={proposal.id}>
+                                    <input type="checkbox" checked={bulkApplySelectedIds.has(proposal.id)}
+                                      disabled={bulkApplying}
+                                      aria-label={`Seleccionar propuesta ${issue?.rule ?? proposal.issueId}`}
+                                      onChange={() => setBulkApplySelectedIds((current) => {
+                                        const next = new Set(current);
+                                        if (next.has(proposal.id)) next.delete(proposal.id); else next.add(proposal.id);
+                                        return next;
+                                      })} />
                                     <div>
                                       <strong>{issue?.rule ?? proposal.issueId}</strong>
                                       <small>{proposal.summary}</small>
@@ -2452,6 +2677,19 @@ export function App() {
                                   </article>
                                 );
                               })}
+                            </div>
+                          ) : null}
+                          {bulkApplyRun?.steps.length ? (
+                            <div className="bulk-apply-progress">
+                              <h3>Aplicación masiva</h3>
+                              <ul className="step-list">
+                                {bulkApplyRun.steps.map((step) => (
+                                  <li key={step.id} className="step-row">
+                                    <StatusBadge status={step.status} />
+                                    <span>{baselineStepLabel(step.stepId)}</span>
+                                  </li>
+                                ))}
+                              </ul>
                             </div>
                           ) : null}
                           {bulkProposalResult ? (
@@ -2495,12 +2733,12 @@ export function App() {
                                   <details className="prompt-audit-details">
                                     <summary>Ver prompt completo enviado a la IA</summary>
                                     <p className="text-muted">Prompt sanitizado exacto · {group.promptChars.toLocaleString()} caracteres · modelo {group.model ?? '—'}</p>
-                                    <CodeBlock>{group.prompt}</CodeBlock>
+                                    <PromptViewer prompt={group.prompt} />
                                   </details>
                                   {group.recoveryPrompt ? (
                                     <details className="prompt-audit-details">
                                       <summary>Ver prompt compacto de reparación</summary>
-                                      <CodeBlock>{group.recoveryPrompt}</CodeBlock>
+                                      <PromptViewer prompt={group.recoveryPrompt} />
                                     </details>
                                   ) : null}
                                 </article>

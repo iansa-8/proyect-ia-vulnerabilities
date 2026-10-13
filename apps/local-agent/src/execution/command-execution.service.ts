@@ -13,8 +13,6 @@ import {
 } from '@amp/core';
 import {
   assertExistingProjectDirectory,
-  PathNotFoundError,
-  PathValidationError,
   validateProjectPath,
 } from '../common/path-validation';
 
@@ -47,52 +45,22 @@ export class CommandExecutionService {
     const byteLimit = DEFAULT_OUTPUT_BYTE_LIMIT;
     const allowed = request.allowedExitCodes ?? [0];
 
-    let cwd: string;
-    try {
-      cwd = validateProjectPath(request.cwd);
-      assertExistingProjectDirectory(cwd);
-    } catch (err: unknown) {
-      const finishedAt = new Date();
-      const message =
-        err instanceof PathValidationError || err instanceof PathNotFoundError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : String(err);
-      return {
-        command: request.command,
-        args: redactSecretArgs(args, secretValues),
-        cwd: request.cwd,
-        exitCode: null,
-        stdout: '',
-        stderr: redactSecretsInText(message, secretValues),
-        startedAt,
-        finishedAt,
-        durationMs: finishedAt.getTime() - startedAt.getTime(),
-        timedOut: false,
-        success: false,
-        stdoutTruncated: false,
-        stderrTruncated: false,
-      };
+    const cwdResult = this.resolveCwdOrError(request, args, secretValues, startedAt);
+    if ('error' in cwdResult) {
+      return cwdResult.error;
     }
+    const cwd = cwdResult.cwd;
 
     if (!request.command || request.command.trim() === '') {
-      const finishedAt = new Date();
-      return {
-        command: request.command,
-        args: redactSecretArgs(args, secretValues),
+      return this.buildErrorResult({
+        request,
+        args,
+        secretValues,
         cwd,
-        exitCode: null,
-        stdout: '',
         stderr: 'Command must not be empty',
         startedAt,
-        finishedAt,
-        durationMs: finishedAt.getTime() - startedAt.getTime(),
-        timedOut: false,
-        success: false,
-        stdoutTruncated: false,
-        stderrTruncated: false,
-      };
+        finishedAt: new Date(),
+      });
     }
 
     return new Promise<CommandResult>((resolve) => {
@@ -162,23 +130,17 @@ export class CommandExecutionService {
           });
         }
       } catch (err: unknown) {
-        const finishedAt = new Date();
-        const message = err instanceof Error ? err.message : String(err);
-        resolve({
-          command: request.command,
-          args: redactSecretArgs(args, secretValues),
-          cwd,
-          exitCode: null,
-          stdout: '',
-          stderr: redactSecretsInText(message, secretValues),
-          startedAt,
-          finishedAt,
-          durationMs: finishedAt.getTime() - startedAt.getTime(),
-          timedOut: false,
-          success: false,
-          stdoutTruncated: false,
-          stderrTruncated: false,
-        });
+        resolve(
+          this.buildErrorResult({
+            request,
+            args,
+            secretValues,
+            cwd,
+            stderr: extractErrorMessage(err),
+            startedAt,
+            finishedAt: new Date(),
+          }),
+        );
         return;
       }
 
@@ -343,6 +305,63 @@ export class CommandExecutionService {
       });
     });
   }
+
+  private resolveCwdOrError(
+    request: CommandRequest,
+    args: string[],
+    secretValues: string[],
+    startedAt: Date,
+  ): { cwd: string } | { error: CommandResult } {
+    try {
+      const cwd = validateProjectPath(request.cwd);
+      assertExistingProjectDirectory(cwd);
+      return { cwd };
+    } catch (err: unknown) {
+      return {
+        error: this.buildErrorResult({
+          request,
+          args,
+          secretValues,
+          cwd: request.cwd,
+          stderr: extractErrorMessage(err),
+          startedAt,
+          finishedAt: new Date(),
+        }),
+      };
+    }
+  }
+
+  private buildErrorResult(params: {
+    request: CommandRequest;
+    args: string[];
+    secretValues: string[];
+    cwd: string;
+    stderr: string;
+    startedAt: Date;
+    finishedAt: Date;
+  }): CommandResult {
+    const { request, args, secretValues, cwd, stderr, startedAt, finishedAt } =
+      params;
+    return {
+      command: request.command,
+      args: redactSecretArgs(args, secretValues),
+      cwd,
+      exitCode: null,
+      stdout: '',
+      stderr: redactSecretsInText(stderr, secretValues),
+      startedAt,
+      finishedAt,
+      durationMs: finishedAt.getTime() - startedAt.getTime(),
+      timedOut: false,
+      success: false,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+    };
+  }
+}
+
+function extractErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**

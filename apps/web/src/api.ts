@@ -501,6 +501,22 @@ export async function applyAgentProposal(
   return (await response.json()) as PipelineRunView;
 }
 
+export async function applyAgentProposalsInBulk(
+  projectId: string,
+  proposalIds: string[],
+): Promise<PipelineRunView> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/quality/proposals/bulk-apply`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proposalIds, approvedBy: 'local-developer' }),
+    },
+  );
+  if (!response.ok) throw new Error(`No se pudieron aplicar las propuestas: ${await readErrorMessage(response)}`);
+  return (await response.json()) as PipelineRunView;
+}
+
 export async function rejectAgentProposal(projectId: string, issueId: string, proposalId: string): Promise<AgentProposalView> {
   const response = await fetch(
     `${API_BASE_URL}/api/projects/${encodeURIComponent(projectId)}/quality/issues/${encodeURIComponent(issueId)}/proposals/${encodeURIComponent(proposalId)}/reject`,

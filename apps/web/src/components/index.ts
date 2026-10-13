@@ -1,8 +1,13 @@
 export { CodeBlock } from './CodeBlock';
+export { DiffPreview } from './DiffPreview';
 export { EmptyState } from './EmptyState';
 export { ErrorState } from './ErrorState';
+export { Icon } from './Icon';
+export type { IconName } from './Icon';
 export { LoadingState } from './LoadingState';
 export { MetadataList, MetadataRow } from './MetadataRow';
 export { PageHeader } from './PageHeader';
+export { PromptViewer } from './PromptViewer';
 export { Section } from './Section';
+export { SeverityTrendChart } from './SeverityTrendChart';
 export { StatusBadge } from './StatusBadge';

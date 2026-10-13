@@ -64,14 +64,19 @@ export class ValidateApprovedProposalStep implements PipelineStep {
     if (!proposal.contextRevision) return fail(this.id, started, 'PROPOSAL_STALE: proposal has no context revision');
     if (!Object.keys(proposal.contextFileHashes ?? {}).length) return fail(this.id, started, 'PROPOSAL_STALE: proposal has no context hashes');
     const current = await this.safety.capture(context.project.path);
-    if (current.fingerprint !== proposal.contextRevision) {
+    const fileBaselineProposal = (proposal.warnings ?? []).some((warning) => warning.includes('sin repositorio Git'));
+    if (current.fingerprint !== proposal.contextRevision && !fileBaselineProposal) {
       return fail(this.id, started, 'PROPOSAL_STALE: repository working tree changed');
     }
     for (const [file, expected] of Object.entries(proposal.contextFileHashes)) {
       if (current.fileHashes[normalizeFile(file)] !== expected) return fail(this.id, started, `PROPOSAL_STALE: ${normalizeFile(file)} changed`);
     }
     context.data.set('fix.allowedFiles', allowed);
-    return done(this.id, started, { allowedFiles: allowed, contextRevision: proposal.contextRevision });
+    return done(this.id, started, {
+      allowedFiles: allowed,
+      contextRevision: proposal.contextRevision,
+      validationMode: fileBaselineProposal ? 'context-file-hashes' : 'git-fingerprint',
+    });
   }
 }
 
